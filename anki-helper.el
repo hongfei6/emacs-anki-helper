@@ -599,9 +599,23 @@ entry."
                   contents-begin
                 (1+ robust-begin)))
          (contents-end (org-element-property :contents-end elt))
-         (back (buffer-substring-no-properties
-                beg (1- contents-end))))
-    (list front back)))
+         ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+         ;; CL comment out
+         ; (back (buffer-substring-no-properties
+         ;        beg (1- contents-end)))
+         (back (my/org-get-subheadings))
+         )
+         ;; (message "original back is : %s" (type-of back))
+         ; (pp back)
+         ; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+         ; (message "my back is : %s" (type-of myback))
+         ; (pp myback)
+         ; (setq back (replace-regexp-in-string "^\\([[:alnum:]]+\\)" "\\1" back))
+         (setq back (replace-regexp-in-string "\(" "\n" back))  ; 去掉左括号
+         (setq back (replace-regexp-in-string "\)" "\n" back))  ; 将右括号替换为 \n
+         (setq back (replace-regexp-in-string "-" "\n\n-" back))  ; bullet
+    (list front back))
+  )
 
 (defun anki-helper-fields-get-cloze ()
   "Default function for getting filed info of the current entry for
@@ -946,6 +960,138 @@ more informations."
     (delete-overlay mouse-secondary-overlay)
     (deactivate-mark)))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; CL try to build a simple and better formatted card's back
+
+(defvar my/org-include-body-text t
+  "Non-nil means include body text of the current heading before subheadings.
+Set this to nil to exclude body text.")
+
+(defun my/org-get-subheadings ()
+  "Return a list of body text (if included) and subheadings under the current heading.
+If a subheading contains a link, only the description of the link is kept.
+If a subheading contains a date or time, it is removed.
+If `my/org-include-body-text' is non-nil, include the body text of the current heading."
+  ;; (interactive)
+  (let (body-text subheadings result heading-pos)
+    (save-excursion
+      (org-back-to-heading t)  ; Ensure the cursor is at the start of the heading
+      (setq heading-pos (point))  ; Remember the position of the current heading
+
+      ;; Get body text if `my/org-include-body-text' is non-nil
+      ;; (when my/org-include-body-text
+        (let ((start (progn
+                       (forward-line)  ; Move to the line after the heading
+                       (point)))
+              (end (save-excursion
+                     (outline-next-heading)
+                     (if (not (outline-end-p))
+                         (point)  ; Move to the next heading
+                       (point-max)))))  ; If no next heading, use point-max
+          (goto-char start)
+          ;; Collect body text until the next heading or end of buffer
+          (setq body-text (buffer-substring-no-properties start end))
+          (setq body-text (string-trim body-text))) ;; )
+
+      ;; Return to the original heading position
+      (goto-char heading-pos)
+
+      ;; If no body text, set body-text to current heading
+      (unless body-text
+        (setq body-text (org-get-heading t t t t)))
+
+      ;; Collect subheadings
+      (let ((level (org-outline-level)))  ; Get the current heading's level
+        (while (and (outline-next-heading)  ; Move to the next heading
+                    (> (org-outline-level) level))  ; Ensure it's a subheading
+          (when (= (org-outline-level) (1+ level))  ; Only get first-level subheadings
+            (let ((heading (org-get-heading t t t t)))
+              ;; Remove links and keep only the description
+              (setq heading (replace-regexp-in-string org-link-bracket-re "\\2" heading))
+              ;; Remove date or time information
+              (setq heading (replace-regexp-in-string "[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}[0-9]\\{2\\}:[0-9]\\{2\\}:[0-9]\\{2\\}\\(\\+0000\\)?" "" heading))
+              (push (format "- %s" heading) subheadings))))))
+
+    ;; Ensure the first subheading is not included if it follows immediately after the heading with no body text
+    (if (and (not body-text) (car subheadings))
+        (setq subheadings (cdr subheadings)))
+
+    (setq subheadings (reverse subheadings))  ; Reverse the list to maintain document order
+
+    ;; Create the result list with body text and subheadings
+    (setq result (if body-text
+                     (cons body-text subheadings)
+                   subheadings))
+
+    ;; Output the results to a temp buffer
+    (with-output-to-temp-buffer "*Subheadings*"
+      (dolist (item result)
+        (princ (format "%s\n" item))))
+    (setq result (princ (format "%s\n" result)))
+    result))  ; Return the result list
+
+(defun outline-end-p ()
+  "Return t if the current position is at the end of the outline."
+  (save-excursion
+    (goto-char (point-max))
+    (not (outline-back-to-heading t))))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;###autoload
+; (defun anki-helper--entry-filter ()
+;   "过滤当前光标所在标题下的条目。"
+;   (interactive)
+;   (save-excursion
+;     (org-back-to-heading)
+;     (let* ((element (org-element-at-point))
+;            (title (org-element-property :raw-value element))
+;            (body (anki-helper--get-body-text element))
+;            (subheadings (anki-helper--get-subheadings element)))
+;       (anki-helper--process-entry title body subheadings))))
+
+; (defun anki-helper--get-body-text (element)
+;   "获取当前heading的body text，不包括subheadings和PROPERTIES。"
+;   (let ((begin (org-element-property :contents-begin element))
+;         (end (org-element-property :contents-end element)))
+;     (when (and begin end)
+;       (string-trim
+;        (replace-regexp-in-string
+;         "^\\(?:\\*+ .*\n\\|:PROPERTIES:\n\\(?:.*\n\\)*?:END:\n\\)" ""
+;         (buffer-substring-no-properties begin end))))))
+
+; (defun anki-helper--get-subheadings (element)
+;   "获取当前heading下的第一级subheadings。"
+;   (let ((level (1+ (org-element-property :level element)))
+;         subheadings)
+;     (org-element-map element 'headline
+;       (lambda (headline)
+;         (when (= (org-element-property :level headline) level)
+;           (push (org-element-property :raw-value headline) subheadings))))
+;     (nreverse subheadings)))
+
+; (defun anki-helper--process-entry (title body subheadings)
+;   "处理收集到的条目。"
+;   (let* ((front title)
+;          (back (concat (string-trim body)
+;                        (when subheadings
+;                          (concat "\n"
+;                                  (mapconcat (lambda (sh) (concat "- " sh))
+;                                             subheadings "\n")))))
+;          (note-type anki-helper-default-note-type)
+;          (fields (list (cons (car (anki-helper--get-note-fields note-type)) front)
+;                        (cons (cadr (anki-helper--get-note-fields note-type)) back)))
+;          (deck anki-helper-default-deck)
+;          (orig-pos (point-marker)))
+;     (anki-helper-request 'addNote
+;                          (anki-helper--note-to-json
+;                           (make-anki-helper--note
+;                            :maybe-id nil
+;                            :fields fields
+;                            :tags nil
+;                            :deck deck
+;                            :model note-type
+;                            :orig-pos orig-pos)))))
 
 (provide 'anki-helper)
 ;;; anki-helper.el ends here
